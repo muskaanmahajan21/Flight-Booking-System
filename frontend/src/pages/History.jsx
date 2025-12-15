@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
-import api, { BACKEND_URL } from "../apis/api";
+import api from "../apis/api";
+
+const BACKEND_URL = "https://flight-booking-system-gfzh.onrender.com";
 
 export default function History() {
+  const getTicketUrl = (pnr) =>
+    `${BACKEND_URL}/tickets/${pnr}.pdf`;
+
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -52,7 +57,13 @@ export default function History() {
               <p className="font-bold text-lg">₹{b.amount_paid}</p>
 
               <div className="flex gap-3">
-                <button onClick={() => window.open(`${BACKEND_URL}/tickets/${b.pnr}.pdf`, "_blank")} className="text-sm px-3 py-2 bg-sky-600 text-white rounded-lg">Download Ticket</button>
+                <button
+                onClick={() => window.open(getTicketUrl(b.pnr), "_blank")}
+                className="text-sm px-3 py-2 bg-sky-600 text-white rounded-lg">
+                  Download Ticket
+                  </button>
+
+
               </div>
             </div>
           </div>

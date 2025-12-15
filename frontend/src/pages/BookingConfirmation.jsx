@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { BACKEND_URL } from "../apis/api";
+
+const BACKEND_URL = "https://flight-booking-system-gfzh.onrender.com";
 
 export default function BookingConfirmation() {
   const location = useLocation();
@@ -12,7 +13,11 @@ export default function BookingConfirmation() {
     return null;
   }
 
+  
+
   const ticketUrl = `${BACKEND_URL}/tickets/${pnr}.pdf`;
+
+
 
   return (
     <div className="max-w-4xl mx-auto p-6">
