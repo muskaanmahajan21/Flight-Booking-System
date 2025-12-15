@@ -56,8 +56,3 @@ Frontend
 cd frontend
 npm install
 npm start
-
-
-Frontend handles user interaction and displays validations
-
-Authentication is simulated using frontend state and localStorage
