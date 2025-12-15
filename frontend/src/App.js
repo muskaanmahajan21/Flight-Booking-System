@@ -4,6 +4,8 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import { useAuth } from "./auth/AuthContext";
 import History from "./pages/History";
+import Booking from "./pages/Booking";
+import BookingConfirmation from "./pages/BookingConfirmation";
 
 
 function PrivateRoute({ children }) {
@@ -33,6 +35,8 @@ function App() {
           </PrivateRoute>
         }
         />
+        <Route path="/book/:flightId" element={<Booking />} />
+        <Route path="/booking-confirmation" element={<BookingConfirmation />} />
 
       </Routes>
     </BrowserRouter>

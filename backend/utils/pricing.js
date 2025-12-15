@@ -1,68 +1,57 @@
-const db = require("../db");
+const pool = require("../db");
 
-/**
- * Calculate current price (used during SEARCH)
- */
-async function getCurrentPriceForFlight(conn, flight, userId = null) {
-  let price = flight.base_price;
+const SURGE_ATTEMPT_WINDOW_MIN = 5; 
+const SURGE_RESET_MIN = 10; 
+const SURGE_INCREASE = 0.10; 
 
-  // Simple surge logic
-  if (flight.current_price && flight.current_price > flight.base_price) {
-    price = flight.current_price;
+
+async function applySurgePricing(flight_id, conn = null) {
+  const useOwnConn = !conn;
+  try {
+    if (useOwnConn) conn = await pool.getConnection();
+    
+    await conn.execute("INSERT INTO surge_attempts (flight_id, attempt_time) VALUES (?, NOW())", [flight_id]);
+
+    const [countRows] = await conn.execute(
+      `SELECT COUNT(*) as cnt FROM surge_attempts WHERE flight_id = ? AND attempt_time >= (NOW() - INTERVAL ? MINUTE)`,
+      [flight_id, SURGE_ATTEMPT_WINDOW_MIN]
+    );
+    const attempts = countRows[0]?.cnt || 0;
+
+    const [flightRows] = await conn.execute("SELECT base_price FROM flights WHERE flight_id = ?", [flight_id]);
+    if (!flightRows[0]) throw new Error("Flight not found");
+
+    const base = parseFloat(flightRows[0].base_price);
+
+    if (attempts >= 3) {
+      return +(base * (1 + SURGE_INCREASE)).toFixed(2);
+    }
+
+    return +base.toFixed(2);
+  } finally {
+    if (useOwnConn && conn) conn.release();
   }
-
-  return price;
 }
 
-/**
- * Apply surge pricing (used during BOOKING)
- */
-function applySurgePricing(flight_id) {
-  return new Promise((resolve, reject) => {
-    const countSql = `
-      SELECT COUNT(*) AS attempts
-      FROM booking_attempts
-      WHERE flight_id = ?
-      AND attempt_time >= NOW() - INTERVAL 5 MINUTE
-    `;
 
-    db.query(countSql, [flight_id], (err, rows) => {
-      if (err) return reject(err);
+async function getCurrentPriceForFlight(flight_id) {
+  const conn = await pool.getConnection();
+  try {
+   
+    const [countRows] = await conn.execute(
+      `SELECT COUNT(*) as cnt FROM surge_attempts WHERE flight_id = ? AND attempt_time >= (NOW() - INTERVAL ? MINUTE)`,
+      [flight_id, SURGE_ATTEMPT_WINDOW_MIN]
+    );
+    const attempts = countRows[0]?.cnt || 0;
 
-      const attempts = rows[0].attempts;
-
-      let finalPriceSql = `
-        SELECT base_price FROM flights WHERE flight_id = ?
-      `;
-
-      db.query(finalPriceSql, [flight_id], (err, priceRows) => {
-        if (err) return reject(err);
-
-        let price = priceRows[0].base_price;
-
-        // Apply surge after 3 attempts
-        if (attempts >= 3) {
-          price = Math.round(price * 1.1);
-
-          db.query(
-            `UPDATE flights SET current_price = ? WHERE flight_id = ?`,
-            [price, flight_id]
-          );
-        }
-
-        // Log booking attempt
-        db.query(
-          "INSERT INTO booking_attempts (flight_id) VALUES (?)",
-          [flight_id]
-        );
-
-        resolve(price);
-      });
-    });
-  });
+    const [flightRows] = await conn.execute("SELECT base_price FROM flights WHERE flight_id = ?", [flight_id]);
+    if (!flightRows[0]) throw new Error("Flight not found");
+    const base = parseFloat(flightRows[0].base_price);
+    if (attempts >= 3) return +(base * (1 + SURGE_INCREASE)).toFixed(2);
+    return +base.toFixed(2);
+  } finally {
+    conn.release();
+  }
 }
 
-module.exports = {
-  getCurrentPriceForFlight,
-  applySurgePricing,
-};
+module.exports = { applySurgePricing, getCurrentPriceForFlight };

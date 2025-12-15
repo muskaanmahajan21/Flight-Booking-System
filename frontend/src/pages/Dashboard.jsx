@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import api from "../apis/api";
 import { useAuth } from "../auth/AuthContext";
 import TravellerSelector from "../components/TravellerSelector";
@@ -9,7 +10,7 @@ export default function Dashboard() {
   const [tripType, setTripType] = useState("oneway");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [departure_city, setDeparture] = useState("");
+  const [departureDate, setDepartureDate] = useState(""); // ISO yyyy-mm-dd
   const [returnDate, setReturnDate] = useState("");
 
   const [showTraveller, setShowTraveller] = useState(false);
@@ -22,11 +23,11 @@ export default function Dashboard() {
   const [flights, setFlights] = useState([]);
   const [wallet, setWallet] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [processingKey, setProcessingKey] = useState(null); // unique per-card (flight_id || idx)
   const [error, setError] = useState("");
 
-
   useEffect(() => {
-    api.get("/wallet").then((res) => setWallet(res.data.balance));
+    api.get("/wallet").then((res) => setWallet(res.data.balance)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -36,8 +37,8 @@ export default function Dashboard() {
   }, []);
 
   const searchFlights = async () => {
-    if (!from || !to || !departure_city) {
-      setError("Please fill all required fields");
+    if (!from || !to || !departureDate) {
+      setError("Please fill From, To and Depart date");
       return;
     }
 
@@ -45,9 +46,13 @@ export default function Dashboard() {
       setLoading(true);
       setError("");
 
-      const res = await api.get(`/flights?from=${from}&to=${to}`);
-      setFlights(res.data);
-    } catch {
+      const res = await api.get(
+        `/flights?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${encodeURIComponent(departureDate)}`
+      );
+
+      setFlights(res.data || []);
+    } catch (err) {
+      console.error("Failed to fetch flights:", err);
       setError("Failed to fetch flights");
       setFlights([]);
     } finally {
@@ -55,33 +60,45 @@ export default function Dashboard() {
     }
   };
 
-  const bookFlight = async (flightId) => {
+  const bookFlight = async (flightId, idx, flightObject = null) => {
+    const cardKey = flightId || `idx-${idx}`;
+    console.log("Booking clicked", { flightId, idx, cardKey, flightObject });
+
+    setProcessingKey(cardKey);
     try {
       const res = await api.post("/bookings", {
         passenger_name: "SkyWing User",
         flight_id: flightId,
       });
 
-      alert(
-        `Booking Successful ✈️\nPNR: ${res.data.pnr}\nPaid: ₹${res.data.amount_paid}`
-      );
+      console.log("Booking response:", res.data);
+      alert(`Booking Successful ✈️\nPNR: ${res.data.pnr}\nPaid: ₹${res.data.amount_paid}`);
 
-      const walletRes = await api.get("/wallet");
-      setWallet(walletRes.data.balance);
+      // refresh wallet
+      try {
+        const walletRes = await api.get("/wallet");
+        setWallet(walletRes.data.balance);
+      } catch (e) {
+        console.warn("Could not refresh wallet:", e);
+      }
+
+      
     } catch (err) {
-      alert(err.response?.data?.error || "Booking failed");
+      console.error("Book error (frontend):", err);
+    
+      const serverMsg = err.response?.data?.error;
+      alert(serverMsg || err.message || "Booking failed");
+    } finally {
+      setProcessingKey(null);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-sky-50 to-white px-4 py-6">
-
       {/* HEADER */}
       <div className="flex justify-between items-center mb-6 max-w-6xl mx-auto">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-sky-600 text-white flex items-center justify-center rounded-full">
-            ✈
-          </div>
+          <div className="w-12 h-12 bg-sky-600 text-white flex items-center justify-center rounded-full">✈</div>
           <div>
             <h1 className="text-xl font-bold">SkyWing</h1>
             <p className="text-sm text-gray-500">Seamless Flight Booking</p>
@@ -89,41 +106,25 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-6">
-          <button
-            onClick={() => window.location.href = "/history"}
-            className="text-sky-600 font-semibold hover:underline"
-          >
-            My Bookings
-          </button>
+          <button onClick={() => (window.location.href = "/history")} className="text-sky-600 font-semibold hover:underline">My Bookings</button>
 
-          <div className="bg-white px-4 py-2 rounded-full shadow font-semibold">
-            ₹ {wallet}
-          </div>
+          <div className="bg-white px-4 py-2 rounded-full shadow font-semibold">₹ {wallet}</div>
 
-          <button onClick={logout} className="text-red-500 font-semibold">
-            Logout
-          </button>
+          <button onClick={logout} className="text-red-500 font-semibold">Logout</button>
         </div>
       </div>
 
       {/* SEARCH CARD */}
       <div className="bg-white rounded-3xl shadow-xl p-6 max-w-6xl mx-auto">
-
-        {/* TRIP TYPE */}
         <div className="flex gap-6 mb-4">
           {["oneway", "round", "multi"].map((t) => (
             <label key={t} className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                checked={tripType === t}
-                onChange={() => setTripType(t)}
-              />
+              <input type="radio" checked={tripType === t} onChange={() => setTripType(t)} />
               {t === "oneway" ? "One Way" : t === "round" ? "Round Trip" : "Multi City"}
             </label>
           ))}
         </div>
 
-        {/* GRID */}
         <div className="grid grid-cols-1 md:grid-cols-5 border rounded-2xl">
           <div className="p-4 border-r">
             <p className="text-xs text-gray-500">From</p>
@@ -137,7 +138,7 @@ export default function Dashboard() {
 
           <div className="p-4 border-r">
             <p className="text-xs text-gray-500">Depart</p>
-            <input type="date" className="w-full outline-none font-semibold" value={departure_city} onChange={(e) => setDeparture(e.target.value)} />
+            <input type="date" className="w-full outline-none font-semibold" value={departureDate} onChange={(e) => setDepartureDate(e.target.value)} />
           </div>
 
           <div className="p-4 border-r">
@@ -172,47 +173,44 @@ export default function Dashboard() {
         </div>
 
         <button onClick={searchFlights} className="mt-6 w-full bg-sky-600 text-white py-3 rounded-xl font-semibold">
-          Search Flights
+          {loading ? "Searching..." : "Search Flights"}
         </button>
 
         {error && <p className="text-red-500 mt-3">{error}</p>}
       </div>
 
       {/* RESULTS */}
-<div className="max-w-6xl mx-auto mt-8">
-  {loading && <p className="text-center text-gray-500">Loading flights...</p>}
-  
-  {!loading && flights.length === 0 && (
-  <p className="text-center text-gray-500 mt-6">
-    No flights found for this route
-  </p>
-)}
+      <div className="max-w-6xl mx-auto mt-8">
+        {loading && <p className="text-center text-gray-500">Loading flights...</p>}
 
-  {flights.map((f) => (
-    <div
-      key={f.flightId}
-      className="bg-white p-4 rounded-xl shadow flex justify-between items-center mb-4"
-    >
-      <div>
-        <h3 className="font-bold">{f.airline}</h3>
-        <p className="text-sm">
-          {f.departureCity} → {f.arrivalCity}
-        </p>
+        {!loading && flights.length === 0 && <p className="text-center text-gray-500 mt-6">No flights found for this route</p>}
+
+        {flights.map((f, idx) => {
+          const cardKey = f.flight_id || f.flightId || `idx-${idx}`;
+          const price = f.current_price ?? f.currentPrice ?? f.base_price ?? f.basePrice ?? "—";
+          const isProcessing = processingKey === cardKey;
+
+          return (
+            <div key={cardKey} className="bg-white p-4 rounded-xl shadow flex justify-between items-center mb-4">
+              <div>
+                <h3 className="font-bold">{f.airline}</h3>
+                <p className="text-sm">{f.departure_city ?? f.departureCity} → {f.arrival_city ?? f.arrivalCity}</p>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <p className="font-bold text-lg">₹{price}</p>
+                <button
+                  onClick={() => bookFlight(f.flight_id || f.flightId, idx, f)}
+                  className={`px-4 py-2 rounded-lg text-white ${isProcessing ? "bg-gray-400 cursor-wait" : "bg-green-500 hover:bg-green-600"}`}
+                  disabled={isProcessing}
+                >
+                  {isProcessing ? "Processing..." : "Book"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
-
-      <div className="flex items-center gap-4">
-        <p className="font-bold text-lg">₹{f.currentPrice}</p>
-        <button
-          onClick={() => bookFlight(f.flightId)}
-          className="bg-green-500 text-white px-4 py-2 rounded-lg"
-        >
-          Book
-        </button>
-      </div>
-    </div>
-  ))}
-</div>
-
     </div>
   );
 }

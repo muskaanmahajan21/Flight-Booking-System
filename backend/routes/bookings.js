@@ -1,175 +1,104 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db");
+const pool = require("../db");
 const { applySurgePricing } = require("../utils/pricing");
 const generateTicket = require("../utils/ticketPDF");
-const { sendBookingEmail } = require("../utils/emailService");
 
-
-router.get("/", (req, res) => {
-  db.query(
-    "SELECT * FROM bookings ORDER BY booking_time DESC",
-    (err, rows) => {
-      if (err) {
-        console.error("DB error:", err);
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(rows);
-    }
-  );
+router.get("/bookings", async (req, res) => {
+  try {
+    const [rows] = await pool.execute("SELECT * FROM bookings ORDER BY booking_time DESC");
+    res.json(rows);
+  } catch (err) {
+    console.error("DB error (GET /bookings):", err);
+    res.status(500).json({ error: "Failed to fetch bookings" });
+  }
 });
 
 
-router.post("/", (req, res) => {
-  const { passenger_name, flight_id } = req.body;
+router.post("/bookings", async (req, res) => {
+  console.log("POST /api/bookings body:", req.body);
+
+  const passenger_name = (req.body && req.body.passenger_name) || "";
+  const flight_id = (req.body && req.body.flight_id) || "";
 
   if (!passenger_name || !flight_id) {
-    return res.status(400).json({ error: "Missing fields" });
+    return res.status(400).json({ error: "Missing fields: passenger_name and flight_id are required" });
   }
 
-  applySurgePricing(flight_id)
-    .then((finalPrice) => {
-      //  WALLET CHECK
-      db.query("SELECT balance FROM wallet WHERE id = 1", (err, walletRows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!walletRows[0])
-          return res.status(500).json({ error: "Wallet not found" });
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
 
-        if (walletRows[0].balance < finalPrice) {
-          return res.status(400).json({ error: "Insufficient wallet balance" });
-        }
+  
+    const finalPrice = await applySurgePricing(flight_id, conn);
 
-        // DEDUCT WALLET
-        db.query(
-          "UPDATE wallet SET balance = balance - ? WHERE id = 1",
-          [finalPrice],
-          (err) => {
-            if (err) return res.status(500).json({ error: err.message });
+    
+    const [walletRows] = await conn.execute("SELECT balance FROM wallet WHERE id = 1 FOR UPDATE");
+    if (!walletRows[0]) {
+      await conn.rollback();
+      return res.status(500).json({ error: "Wallet not found" });
+    }
 
-            // FETCH FLIGHT
-            db.query(
-              "SELECT * FROM flights WHERE flight_id = ?",
-              [flight_id],
-              (err, flightRows) => {
-                if (err) return res.status(500).json({ error: err.message });
-                if (!flightRows[0])
-                  return res.status(404).json({ error: "Flight not found" });
+    const currentBalance = parseFloat(walletRows[0].balance);
+    if (currentBalance < finalPrice) {
+      await conn.rollback();
+      return res.status(400).json({ error: "Insufficient wallet balance" });
+    }
 
-                const flight = flightRows[0];
-                const pnr =
-                  "PNR-" +
-                  Math.random().toString(36).substring(2, 8).toUpperCase();
+    // Deduct wallet
+    await conn.execute("UPDATE wallet SET balance = balance - ? WHERE id = 1", [finalPrice]);
 
-                // INSERT BOOKING
-                db.query(
-                  `INSERT INTO bookings
-                   (passenger_name, flight_id, airline, departure_city, arrival_city, amount_paid, pnr, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFIRMED')`,
-                  [
-                    passenger_name,
-                    flight.flight_id,
-                    flight.airline,
-                    flight.departure_city,
-                    flight.arrival_city,
-                    finalPrice,
-                    pnr,
-                  ],
-                  async (err) => {
-                    if (err)
-                      return res.status(500).json({ error: err.message });
+    const [flightRows] = await conn.execute("SELECT * FROM flights WHERE flight_id = ?", [flight_id]);
+    if (!flightRows[0]) {
+      await conn.rollback();
+      return res.status(404).json({ error: "Flight not found" });
+    }
+    const flight = flightRows[0];
 
-                    //  GENERATE TICKET PDF
-                    generateTicket({
-                      passenger_name,
-                      flight,
-                      price: finalPrice,
-                      pnr,
-                    });
+    // Generate PNR and insert booking
+    const pnr = "PNR-" + Date.now().toString(36).toUpperCase().slice(-8);
+    const bookingTime = new Date();
 
-                    //  SEND CONFIRMATION EMAIL
-                    try {
-                      await sendBookingEmail({
-                        to: "customer@example.com", // replace later with real email
-                        subject: "✈️ SkyWing Booking Confirmed",
-                        html: `
-                          <h2>Booking Confirmed</h2>
-                          <p><b>Passenger:</b> ${passenger_name}</p>
-                          <p><b>PNR:</b> ${pnr}</p>
-                          <p><b>Airline:</b> ${flight.airline}</p>
-                          <p><b>Route:</b> ${flight.departure_city} → ${flight.arrival_city}</p>
-                          <p><b>Amount Paid:</b> ₹${finalPrice}</p>
-                          <p><b>Booking Time:</b> ${new Date().toLocaleString()}</p>
-                          <br/>
-                          <p>You can download your ticket from <b>My Bookings</b>.</p>
-                          <p>✈️ Happy Journey with SkyWing</p>
-                        `,
-                      });
-                    } catch (emailErr) {
-                      console.error("Email failed:", emailErr);
-                    }
-
-                    res.json({
-                      message: "Booking successful",
-                      pnr,
-                      amount_paid: finalPrice,
-                    });
-                  }
-                );
-              }
-            );
-          }
-        );
-      });
-    })
-    .catch((err) => {
-      console.error("Pricing error:", err);
-      res.status(500).json({ error: "Pricing calculation failed" });
-    });
-});
-
-
-router.post("/cancel/:pnr", (req, res) => {
-  const { pnr } = req.params;
-
-  db.query("SELECT * FROM bookings WHERE pnr = ?", [pnr], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!rows[0])
-      return res.status(404).json({ error: "Booking not found" });
-
-    const booking = rows[0];
-
-    db.query(
-      "UPDATE bookings SET status = 'CANCELLED' WHERE pnr = ?",
-      [pnr],
-      async (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-
-        // SEND CANCELLATION EMAIL
-        try {
-          await sendBookingEmail({
-            to: "customer@example.com",
-            subject: "❌ SkyWing Booking Cancelled",
-            html: `
-              <h2>Booking Cancelled</h2>
-              <p><b>PNR:</b> ${pnr}</p>
-              <p><b>Airline:</b> ${booking.airline}</p>
-              <p><b>Route:</b> ${booking.departure_city} → ${booking.arrival_city}</p>
-              <p>Your booking has been successfully cancelled.</p>
-              <br/>
-              <p>We hope to serve you again ✈️</p>
-            `,
-          });
-        } catch (emailErr) {
-          console.error("Cancel email failed:", emailErr);
-        }
-
-        res.json({
-          message: "Booking cancelled successfully",
-          pnr,
-        });
-      }
+    await conn.execute(
+      `INSERT INTO bookings (pnr, passenger_name, flight_id, amount_paid, booking_time, departure_city, arrival_city, airline, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [pnr, passenger_name, flight_id, finalPrice, bookingTime, flight.departure_city, flight.arrival_city, flight.airline, "CONFIRMED"]
     );
-  });
+
+    await conn.commit();
+
+    // Generate ticket PDF asynchronously (non-blocking)
+    (async () => {
+      try {
+        await generateTicket({
+          pnr,
+          passenger_name,
+          flight,
+          amount_paid: finalPrice,
+          booking_time: bookingTime,
+        });
+      } catch (e) {
+        console.warn("Ticket generation warning:", e);
+      }
+    })();
+
+    console.log(`Booking successful: PNR=${pnr}, flight_id=${flight_id}, amount=${finalPrice}`);
+    return res.json({ pnr, amount_paid: finalPrice });
+  } catch (err) {
+    console.error("Booking error:", err);
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {
+        console.error("Rollback failed:", rollbackErr);
+      }
+    }
+    
+    return res.status(500).json({ error: err.message || "Booking failed due to server error" });
+  } finally {
+    if (conn) conn.release();
+  }
 });
 
 module.exports = router;
