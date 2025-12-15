@@ -1,26 +1,23 @@
-const express = require("express");
-const cors = require("cors");
-const db = require("./db");
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+require('dotenv').config();
 
-const flightRoutes = require("./routes/flights");
-const bookingRoute = require("./routes/bookings");
-const walletRoutes = require("./routes/wallet");
-
-
+const flightsRouter = require('./routes/flights');
+const bookingsRouter = require('./routes/bookings');
+const walletRouter = require('./routes/wallet');
 
 const app = express();
-
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-app.use("/api/flights", flightRoutes);
-app.use("/api/bookings", bookingRoute);
-app.use("/api/wallet", walletRoutes);
+app.use('/api', flightsRouter);
+app.use('/api', bookingsRouter);
+app.use('/api', walletRouter);
 
-app.get("/", (req, res) => {
-  res.send("Flight Booking Backend Running");
-});
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.listen(5000, () => {
-  console.log("Server running on http://localhost:5000");
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log(`Backend running on http://localhost:${PORT}`);
 });
