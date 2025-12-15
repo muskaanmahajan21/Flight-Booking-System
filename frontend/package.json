@@ -1,5 +1,5 @@
 {
-  "homepage": "https://muskaanmahajan.github.io/Flight-Booking-System",
+  "homepage": "https://muskaanmahajan21.github.io/Flight-Booking-System",
   "predeploy": "npm run build",
   "deploy": "gh-pages -d build",
   "name": "frontend",
@@ -18,10 +18,10 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d build",
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
