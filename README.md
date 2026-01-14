@@ -16,7 +16,6 @@ The system demonstrates real-world features such as dynamic pricing, wallet-base
 - Price resets after defined cooldown period
 
 ### Wallet System
-- Default wallet balance ₹50,000
 - Wallet balance fetched from database
 - Automatic deduction on successful booking
 - Booking blocked with clear error if balance is insufficient
